@@ -2,21 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish a reproducible public `linux/amd64` Jellyfin image containing singular fix commit `2121f9bee116e7c10a482a1931f1dbf94818299d` without changing the upstream-ready fix branch.
+**Goal:** Publish a source-pinned, auditable public `linux/amd64` Jellyfin image containing singular fix commit `a44a26b287a328927c6d7bffa0a253b0d1a807dd` without changing the upstream-ready fix branch.
 
-**Architecture:** Create `build/legacy-filter-query-image` from the exact fix commit and add one branch-scoped GitHub Actions workflow commit. The workflow combines that server source with pinned Jellyfin Web and packaging revisions, publishes stable and immutable GHCR tags, then the production host validates anonymous pull, metadata, and disposable-container health without changing its live Jellyfin template.
+**Architecture:** Create `build/legacy-filter-query-image` from the exact fix commit and add one branch-scoped GitHub Actions workflow commit. The workflow combines that server source with pinned Jellyfin Web and packaging revisions, publishes stable and commit-addressed GHCR tags, records their content digest, then the production host validates anonymous pull, metadata, and disposable-container health without changing its live Jellyfin template.
 
 **Tech Stack:** GitHub Actions, Docker Buildx, GHCR, Jellyfin 12/.NET 10, Unraid Docker
 
 ## Global Constraints
 
-- `fix/legacy-filter-tag-query` remains unchanged at singular commit `2121f9bee116e7c10a482a1931f1dbf94818299d`, exactly one commit ahead of `master`.
+- `fix/legacy-filter-tag-query` remains unchanged at singular commit `a44a26b287a328927c6d7bffa0a253b0d1a807dd`, exactly one commit ahead of `master`.
 - Build branch `build/legacy-filter-query-image` starts at the fix commit and contains exactly one additional workflow commit.
 - Pin Jellyfin Web to `a66fb60b2c4fccfcc0cbf08662c9d1e8f583de51` and packaging to `846b546838941cefac00cfe5ac08d9adf6dff26c`.
 - Build only `linux/amd64` with the official packaging Dockerfile and runtime contract.
 - Publish `ghcr.io/felixfoertsch/jellyfin:legacy-filter-query` and `ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${GITHUB_SHA}` from one build.
 - Grant only `contents: read` and `packages: write`; use only `GITHUB_TOKEN` for GHCR.
 - The resulting package is public and anonymously pullable from Unraid.
+- The official packaging Dockerfile retains mutable transitive OS/runtime/package inputs; the workflow records the immutable published digest and does not claim byte-for-byte rebuild reproducibility.
 - Do not modify application source, tests, the live Unraid template, or the running production container.
 
 ---
@@ -34,7 +35,7 @@
 - Create: `.github/workflows/build-legacy-filter-query-image.yml`
 
 **Interfaces:**
-- Consumes: fix commit `2121f9bee116e7c10a482a1931f1dbf94818299d`, pinned web and packaging revisions, repository `GITHUB_TOKEN`.
+- Consumes: fix commit `a44a26b287a328927c6d7bffa0a253b0d1a807dd`, pinned web and packaging revisions, repository `GITHUB_TOKEN`.
 - Produces: branch `build/legacy-filter-query-image` with one workflow commit and no source changes.
 
 - [ ] **Step 1: Reconfirm the contribution branch contract**
@@ -50,7 +51,7 @@ git diff --check upstream/master...fix/legacy-filter-tag-query
 Expected:
 
 - both master refs equal `33a8cdfc0b77d7a2439aeb3472db5adda095b41b`;
-- fix ref equals `2121f9bee116e7c10a482a1931f1dbf94818299d`;
+- fix ref equals `a44a26b287a328927c6d7bffa0a253b0d1a807dd`;
 - count is exactly `1`;
 - diff check exits `0`.
 
@@ -67,7 +68,7 @@ Expected: 10 Item tests pass and Release build reports zero errors. Existing `NU
 
 - [ ] **Step 3: Create an isolated build worktree**
 
-Create branch `build/legacy-filter-query-image` at exact fix commit `2121f9bee116e7c10a482a1931f1dbf94818299d` in:
+Create branch `build/legacy-filter-query-image` at exact fix commit `a44a26b287a328927c6d7bffa0a253b0d1a807dd` in:
 
 ```text
 /Users/felixfoertsch/Developer/netfelix/jellyfin/.worktrees/build-legacy-filter-query-image/
@@ -138,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           git -C jellyfin-server merge-base --is-ancestor \
-            2121f9bee116e7c10a482a1931f1dbf94818299d \
+            a44a26b287a328927c6d7bffa0a253b0d1a807dd \
             HEAD
 
       - name: Set up Docker Buildx
@@ -171,7 +172,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=12.0.0-legacy-filter-query
             org.opencontainers.image.title=Jellyfin legacy tag-filter fix
-            de.felixfoertsch.jellyfin.fix-revision=2121f9bee116e7c10a482a1931f1dbf94818299d
+            de.felixfoertsch.jellyfin.fix-revision=a44a26b287a328927c6d7bffa0a253b0d1a807dd
           build-args: |
             PACKAGE_ARCH=amd64
             DOTNET_ARCH=x64
@@ -186,15 +187,19 @@ jobs:
 
       - name: Publish image summary
         shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD_SHA: ${{ github.sha }}
+          FIX_SHA: a44a26b287a328927c6d7bffa0a253b0d1a807dd
         run: |
           {
-            echo '## Legacy filter fix image'
+            echo "## Legacy filter fix image"
             echo
-            echo '- Stable: `ghcr.io/felixfoertsch/jellyfin:legacy-filter-query`'
-            echo '- Immutable: `ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ github.sha }}`'
-            echo '- Digest: `${{ steps.build.outputs.digest }}`'
-            echo '- Build revision: `${{ github.sha }}`'
-            echo '- Fix revision: `2121f9bee116e7c10a482a1931f1dbf94818299d`'
+            echo "- Stable tag: ghcr.io/felixfoertsch/jellyfin:legacy-filter-query"
+            echo "- Commit tag: \`ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${BUILD_SHA}\`"
+            echo "- Immutable digest: \`${BUILD_DIGEST}\`"
+            echo "- Build revision: \`${BUILD_SHA}\`"
+            echo "- Fix revision: ${FIX_SHA}"
           } >> "${GITHUB_STEP_SUMMARY}"
 ```
 
@@ -217,7 +222,7 @@ Inspect the workflow and confirm:
 - all external actions use full commit pins;
 - web and packaging refs match the Global Constraints;
 - both image tags are published by one build step;
-- the fix-ancestry check uses exact commit `2121f9b`.
+- the fix-ancestry check uses exact commit `a44a26b`.
 
 - [ ] **Step 6: Commit the workflow only**
 
@@ -229,8 +234,8 @@ git commit -m "build legacy filter fix image"
 Verify:
 
 ```bash
-git rev-list --count 2121f9bee116e7c10a482a1931f1dbf94818299d..HEAD
-git diff --stat 2121f9bee116e7c10a482a1931f1dbf94818299d..HEAD
+git rev-list --count a44a26b287a328927c6d7bffa0a253b0d1a807dd..HEAD
+git diff --stat a44a26b287a328927c6d7bffa0a253b0d1a807dd..HEAD
 git status --short --branch
 ```
 
@@ -244,7 +249,7 @@ Expected: one commit, one created workflow file, clean build branch.
 
 **Interfaces:**
 - Consumes: reviewed build branch and GitHub Actions workflow from Task 1.
-- Produces: public stable and immutable GHCR tags with one digest plus verified anonymous Unraid pull and startup evidence.
+- Produces: public stable and commit-addressed GHCR tags resolving to one recorded digest plus verified anonymous Unraid pull and startup evidence.
 
 - [ ] **Step 1: Push the build branch**
 
@@ -278,7 +283,7 @@ gh run view "$run_id" --repo felixfoertsch/jellyfin --log
 build_sha=$(gh run view "$run_id" --repo felixfoertsch/jellyfin --json headSha --jq '.headSha')
 ```
 
-Record the full build SHA, workflow URL, and `sha256:` image digest from the build output or summary. Do not infer a digest from a local image ID.
+Record the full build SHA, workflow URL, and `sha256:` image digest from the build output or summary. The digest-qualified image reference is the immutable validation, rollback, and deployment identity; do not infer it from a tag or local image ID.
 
 - [ ] **Step 4: Make the package public**
 
@@ -291,34 +296,38 @@ gh api /user/packages/container/jellyfin
 
 Expected: package metadata reports `visibility: public`. If the package was already public, keep it public and continue.
 
-- [ ] **Step 5: Pull both tags anonymously on Unraid**
+- [ ] **Step 5: Pull both tags and the digest anonymously on Unraid**
 
 Set the full build SHA from Task 2 Step 3, then run:
 
 ```bash
 build_sha=$(gh run list --repo felixfoertsch/jellyfin --workflow build-legacy-filter-query-image.yml --branch build/legacy-filter-query-image --limit 1 --json headSha --jq '.[0].headSha')
+image_digest=$(gh api /user/packages/container/jellyfin/versions --paginate --jq '.[] | select(.metadata.container.tags[] == "legacy-filter-query-'"${build_sha}"'") | .name')
+test -n "$image_digest"
 ssh unraid "docker pull --platform linux/amd64 ghcr.io/felixfoertsch/jellyfin:legacy-filter-query"
 ssh unraid "docker pull --platform linux/amd64 ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-$build_sha"
+ssh unraid "docker pull --platform linux/amd64 ghcr.io/felixfoertsch/jellyfin@${image_digest}"
 ```
 
-Expected: both pulls succeed without configuring GHCR credentials on Unraid.
+Expected: all three pulls succeed without configuring GHCR credentials on Unraid.
 
-- [ ] **Step 6: Verify both tags and image metadata**
+- [ ] **Step 6: Verify both tags, the digest, and image metadata**
 
-Inspect both tags and require:
+Inspect both tags and the digest-qualified reference and require:
 
 - identical image ID and `RepoDigests` digest;
 - architecture `amd64`, OS `linux`;
 - entrypoint `[/jellyfin/jellyfin]`;
 - localhost `8096/health` health check;
 - `org.opencontainers.image.revision` equals the full build SHA;
-- custom fix label equals `2121f9bee116e7c10a482a1931f1dbf94818299d`.
+- custom fix label equals `a44a26b287a328927c6d7bffa0a253b0d1a807dd`.
 
 Use:
 
 ```bash
 build_sha=$(gh run list --repo felixfoertsch/jellyfin --workflow build-legacy-filter-query-image.yml --branch build/legacy-filter-query-image --limit 1 --json headSha --jq '.[0].headSha')
-ssh unraid "docker image inspect ghcr.io/felixfoertsch/jellyfin:legacy-filter-query ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-$build_sha"
+image_digest=$(gh api /user/packages/container/jellyfin/versions --paginate --jq '.[] | select(.metadata.container.tags[] == "legacy-filter-query-'"${build_sha}"'") | .name')
+ssh unraid "docker image inspect ghcr.io/felixfoertsch/jellyfin:legacy-filter-query ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-$build_sha ghcr.io/felixfoertsch/jellyfin@${image_digest}"
 ```
 
 - [ ] **Step 7: Verify disposable-container health**
@@ -327,7 +336,8 @@ Confirm no existing container has the exact validation name, then start without 
 
 ```bash
 build_sha=$(gh run list --repo felixfoertsch/jellyfin --workflow build-legacy-filter-query-image.yml --branch build/legacy-filter-query-image --limit 1 --json headSha --jq '.[0].headSha')
-ssh unraid "docker run --detach --name jellyfin-filter-image-validation ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-$build_sha"
+image_digest=$(gh api /user/packages/container/jellyfin/versions --paginate --jq '.[] | select(.metadata.container.tags[] == "legacy-filter-query-'"${build_sha}"'") | .name')
+ssh unraid "docker run --detach --name jellyfin-filter-image-validation ghcr.io/felixfoertsch/jellyfin@${image_digest}"
 ```
 
 Poll `docker inspect jellyfin-filter-image-validation` until health is `healthy` or 90 seconds elapse. On failure, capture `docker logs jellyfin-filter-image-validation` and report the blocker.
@@ -365,4 +375,4 @@ Expected: production remains on its existing local fixed image, running and heal
 
 ## Completion Boundary
 
-Completion means the public GHCR package contains both tags at one digest, anonymous Unraid pull succeeds, metadata and disposable health pass, and production remains unchanged. Repointing production to GHCR is a separate approved action.
+Completion means the public GHCR package contains both tags at the workflow-recorded digest, anonymous Unraid tag and digest pulls succeed, metadata and disposable health pass, and production remains unchanged. Repointing production to the digest-qualified image is a separate approved action.
