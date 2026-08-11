@@ -12,7 +12,7 @@ curl_bin=${CURL_BIN:-curl}
 token=$(
 	"${curl_bin}" --fail --silent --show-error --location \
 		"https://ghcr.io/token?scope=repository:${repository}:pull" \
-		| jq -er '.token'
+		| jq -er 'if (.token | type == "string" and length > 0) then .token else error("GHCR token response must contain a non-empty string token") end'
 )
 status=$(
 	"${curl_bin}" --silent --show-error --output /dev/null --write-out '%{http_code}' \

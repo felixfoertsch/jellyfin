@@ -153,7 +153,11 @@ cat > "${TEMP_DIR}/curl" <<'BASH'
 set -euo pipefail
 
 if [[ "$*" == *'/token?'* ]]; then
-	printf '{"token":"fixture-token"}\n'
+	if [[ -v MOCK_TOKEN_RESPONSE ]]; then
+		printf '%s\n' "${MOCK_TOKEN_RESPONSE}"
+	else
+		printf '{"token":"fixture-token"}\n'
+	fi
 	exit
 fi
 
@@ -174,5 +178,22 @@ assert_equal \
 if CURL_BIN="${TEMP_DIR}/curl" MOCK_REGISTRY_STATUS=500 \
 	"${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5 >/dev/null 2>&1; then
 	printf 'FAIL: unexpected registry status must fail\n' >&2
+	exit 1
+fi
+
+if malformed_token_output=$(CURL_BIN="${TEMP_DIR}/curl" MOCK_TOKEN_RESPONSE='{"token":123}' \
+	MOCK_REGISTRY_STATUS=200 "${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5 2>&1); then
+	printf 'FAIL: numeric GHCR token must fail\n' >&2
+	exit 1
+fi
+
+if [[ "${malformed_token_output}" != *'GHCR token response must contain a non-empty string token'* ]]; then
+	printf 'FAIL: numeric GHCR token error must be visible\n' >&2
+	exit 1
+fi
+
+if CURL_BIN="${TEMP_DIR}/curl" MOCK_TOKEN_RESPONSE='{"token":""}' \
+	MOCK_REGISTRY_STATUS=200 "${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5 >/dev/null 2>&1; then
+	printf 'FAIL: empty GHCR token must fail\n' >&2
 	exit 1
 fi
