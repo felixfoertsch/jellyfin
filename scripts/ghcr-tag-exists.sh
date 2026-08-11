@@ -17,7 +17,7 @@ token=$(
 status=$(
 	"${curl_bin}" --silent --show-error --output /dev/null --write-out '%{http_code}' \
 		-H "Authorization: Bearer ${token}" \
-		-H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+		-H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
 		"https://ghcr.io/v2/${repository}/manifests/${tag}"
 )
 

@@ -152,6 +152,10 @@ cat > "${TEMP_DIR}/curl" <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ ${MOCK_CURL_ARGS_FILE+x} ]]; then
+	printf '%s\n' "$@" > "${MOCK_CURL_ARGS_FILE}"
+fi
+
 if [[ "$*" == *'/token?'* ]]; then
 	if [[ ${MOCK_TOKEN_RESPONSE+x} ]]; then
 		printf '%s\n' "${MOCK_TOKEN_RESPONSE}"
@@ -169,6 +173,22 @@ assert_equal \
 	"true" \
 	"$(CURL_BIN="${TEMP_DIR}/curl" MOCK_REGISTRY_STATUS=200 "${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5)" \
 	"existing GHCR tag returns true"
+
+curl_args=${TEMP_DIR}/ghcr-curl-args
+CURL_BIN="${TEMP_DIR}/curl" \
+	MOCK_CURL_ARGS_FILE="${curl_args}" \
+	MOCK_REGISTRY_STATUS=200 \
+	"${ROOT_DIR}/scripts/ghcr-tag-exists.sh" \
+	felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5 >/dev/null
+
+if ! grep -Fq 'application/vnd.docker.distribution.manifest.v2+json' "${curl_args}"; then
+	printf 'FAIL: GHCR probe does not request Docker Schema 2\n' >&2
+	exit 1
+fi
+if grep -Fq 'application/vnd.oci.' "${curl_args}"; then
+	printf 'FAIL: GHCR probe accepts OCI media types that Unraid rejects\n' >&2
+	exit 1
+fi
 
 assert_equal \
 	"false" \
@@ -226,14 +246,25 @@ do
 	fi
 done
 
-build_tags=$(awk '
+for required in \
+	'outputs: |' \
+	'type=registry,name=ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ steps.release.outputs.tag }},oci-mediatypes=false' \
+	'provenance: false' \
+	'sbom: false'
+do
+	if ! grep -Fq -- "${required}" "${workflow}"; then
+		printf 'FAIL: workflow lacks Docker Schema 2 contract: %s\n' "${required}" >&2
+		exit 1
+	fi
+done
+
+build_step=$(awk '
 	/^      - name: Build and push$/ { in_build = 1 }
-	in_build && /^          tags: \|$/ { in_tags = 1; next }
-	in_tags && /^          labels: \|$/ { exit }
-	in_tags { print }
+	in_build && /^      - name: / { exit }
+	in_build { print }
 ' "${workflow}")
-if grep -Eq '^[[:space:]]*ghcr\.io/felixfoertsch/jellyfin:legacy-filter-query[[:space:]]*$' <<< "${build_tags}"; then
-	printf 'FAIL: workflow build tags include the rolling tag\n' >&2
+if grep -Fq 'push: true' <<< "${build_step}" || grep -Eq '^[[:space:]]*tags:' <<< "${build_step}"; then
+	printf 'FAIL: workflow build step delegates publication outside the registry exporter\n' >&2
 	exit 1
 fi
 

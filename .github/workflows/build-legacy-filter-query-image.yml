@@ -116,13 +116,12 @@ jobs:
           context: packaging
           file: packaging/docker/Dockerfile
           platforms: linux/amd64
-          push: true
           pull: true
           no-cache: true
           provenance: false
           sbom: false
-          tags: |
-            ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ steps.release.outputs.tag }}
+          outputs: |
+            type=registry,name=ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ steps.release.outputs.tag }},oci-mediatypes=false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.patch.outputs.sha }}
