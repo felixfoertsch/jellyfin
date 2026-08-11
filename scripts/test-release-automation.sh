@@ -224,16 +224,21 @@ cat > "${TEMP_DIR}/release-bin/gh" <<'BASH'
 set -euo pipefail
 
 : "${MOCK_GH_LOG:?MOCK_GH_LOG is required}"
-printf '%s' "$1" >> "${MOCK_GH_LOG}"
+command=$1
+printf '%s' "${command}" >> "${MOCK_GH_LOG}"
 shift
 for arg in "$@"; do
 	printf ' %s' "${arg}" >> "${MOCK_GH_LOG}"
 done
 printf '\n' >> "${MOCK_GH_LOG}"
 
-if [[ "$*" == view\ * ]]; then
-	[[ "${MOCK_RELEASE_EXISTS}" == "true" ]]
-	exit
+if [[ "${command}" == "api" ]]; then
+	: "${MOCK_LOOKUP_STATUS:?MOCK_LOOKUP_STATUS is required}"
+	printf 'HTTP/2.0 %s Fixture\n\n' "${MOCK_LOOKUP_STATUS}"
+	if [[ "${MOCK_LOOKUP_STATUS}" == "200" ]]; then
+		exit
+	fi
+	exit 1
 fi
 if [[ "$*" == create\ * ]]; then
 	: "${MOCK_NOTES_FILE:?MOCK_NOTES_FILE is required}"
@@ -252,7 +257,7 @@ result=$(
 	PATH="${TEMP_DIR}/release-bin:${PATH}" \
 	MOCK_GH_LOG="${release_log}" \
 	MOCK_NOTES_FILE="${release_notes}" \
-	MOCK_RELEASE_EXISTS=false \
+	MOCK_LOOKUP_STATUS=404 \
 	GH_TOKEN=fixture \
 	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
 	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
@@ -292,7 +297,7 @@ done
 PATH="${TEMP_DIR}/release-bin:${PATH}" \
 	MOCK_GH_LOG="${release_log}" \
 	MOCK_NOTES_FILE="${release_notes}" \
-	MOCK_RELEASE_EXISTS=false \
+	MOCK_LOOKUP_STATUS=404 \
 	GH_TOKEN=fixture \
 	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
 	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
@@ -309,7 +314,7 @@ result=$(
 	PATH="${TEMP_DIR}/release-bin:${PATH}" \
 	MOCK_GH_LOG="${release_log}" \
 	MOCK_NOTES_FILE="${release_notes}" \
-	MOCK_RELEASE_EXISTS=true \
+	MOCK_LOOKUP_STATUS=200 \
 	GH_TOKEN=fixture \
 	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
 	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
@@ -322,6 +327,69 @@ if grep -Fq 'release create' "${release_log}"; then
 	printf 'FAIL: existing release is recreated\n' >&2
 	exit 1
 fi
+
+for status in 401 500; do
+	: > "${release_log}"
+	if lookup_failure=$(
+		PATH="${TEMP_DIR}/release-bin:${PATH}" \
+		MOCK_GH_LOG="${release_log}" \
+		MOCK_NOTES_FILE="${release_notes}" \
+		MOCK_LOOKUP_STATUS="${status}" \
+		GH_TOKEN=fixture \
+		GITHUB_REPOSITORY=felixfoertsch/jellyfin \
+		IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
+		FIX_SHA=a44a26b287a328927c6d7bffa0a253b0d1a807dd \
+		"${ROOT_DIR}/scripts/publish-patched-release.sh" \
+		v12.0-rc5 '12.0 RC5' true fixture-target 2>&1
+	); then
+		printf 'FAIL: HTTP %s lookup failure must fail\n' "${status}" >&2
+		exit 1
+	fi
+	if [[ "${lookup_failure}" != *'failed to look up GitHub Release'* ]]; then
+		printf 'FAIL: HTTP %s lookup failure is not visible\n' "${status}" >&2
+		exit 1
+	fi
+	if grep -Fq 'release create' "${release_log}"; then
+		printf 'FAIL: HTTP %s lookup failure attempts release creation\n' "${status}" >&2
+		exit 1
+	fi
+done
+
+assert_publisher_rejects_control_character() {
+	local message=$1
+	shift
+
+	: > "${release_log}"
+	if PATH="${TEMP_DIR}/release-bin:${PATH}" \
+		MOCK_GH_LOG="${release_log}" \
+		MOCK_NOTES_FILE="${release_notes}" \
+		MOCK_LOOKUP_STATUS=404 \
+		GH_TOKEN=fixture \
+		GITHUB_REPOSITORY=felixfoertsch/jellyfin \
+		IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
+		FIX_SHA=a44a26b287a328927c6d7bffa0a253b0d1a807dd \
+		"${ROOT_DIR}/scripts/publish-patched-release.sh" "$@" >/dev/null 2>&1; then
+		printf 'FAIL: %s\n' "${message}" >&2
+		exit 1
+	fi
+	if [[ -s "${release_log}" ]]; then
+		printf 'FAIL: %s reaches GitHub CLI\n' "${message}" >&2
+		exit 1
+	fi
+}
+
+assert_publisher_rejects_control_character \
+	"control characters in upstream tags are rejected" \
+	$'v12.0-rc5\nunsafe' '12.0 RC5' true fixture-target
+assert_publisher_rejects_control_character \
+	"control characters in upstream names are rejected" \
+	v12.0-rc5 $'12.0 RC5\runsafe' true fixture-target
+assert_publisher_rejects_control_character \
+	"control characters in prerelease values are rejected" \
+	v12.0-rc5 '12.0 RC5' $'true\037unsafe' fixture-target
+assert_publisher_rejects_control_character \
+	"control characters in target SHAs are rejected" \
+	v12.0-rc5 '12.0 RC5' true $'fixture-target\nunsafe'
 
 workflow=${ROOT_DIR}/.github/workflows/build-legacy-filter-query-image.yml
 if [[ ! -f "${workflow}" ]]; then

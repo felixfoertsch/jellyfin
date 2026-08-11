@@ -15,19 +15,31 @@ target_sha=$4
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 : "${FIX_SHA:?FIX_SHA is required}"
 
-if [[ -z "${upstream_tag}" || -z "${upstream_name}" || -z "${target_sha}" ]]; then
-	printf 'release arguments must not be empty\n' >&2
-	exit 2
-fi
+for value in "${upstream_tag}" "${upstream_name}" "${prerelease}" "${target_sha}"; do
+	if [[ -z "${value}" || "${value}" =~ [[:cntrl:]] ]]; then
+		printf 'release arguments must not be empty or contain control characters\n' >&2
+		exit 2
+	fi
+done
 if [[ "${prerelease}" != "true" && "${prerelease}" != "false" ]]; then
 	printf 'prerelease must be true or false\n' >&2
 	exit 2
 fi
 
 release_tag=${upstream_tag}-legacy-filter-query
-if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+
+lookup_response=$(mktemp)
+trap 'rm -f "${lookup_response}"' EXIT
+if gh api --include "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" > "${lookup_response}" 2>&1; then
 	printf 'existing\n'
 	exit
+fi
+
+lookup_status=$(awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9] / { print $2; exit }' "${lookup_response}")
+if [[ "${lookup_status}" != "404" ]]; then
+	cat "${lookup_response}" >&2
+	printf 'failed to look up GitHub Release %s\n' "${release_tag}" >&2
+	exit 1
 fi
 
 args=(
