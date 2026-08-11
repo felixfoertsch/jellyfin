@@ -197,3 +197,28 @@ if CURL_BIN="${TEMP_DIR}/curl" MOCK_TOKEN_RESPONSE='{"token":""}' \
 	printf 'FAIL: empty GHCR token must fail\n' >&2
 	exit 1
 fi
+
+workflow=${ROOT_DIR}/.github/workflows/build-legacy-filter-query-image.yml
+if [[ ! -f "${workflow}" ]]; then
+	printf 'FAIL: release workflow is missing\n' >&2
+	exit 1
+fi
+
+for required in \
+	'schedule:' \
+	'workflow_dispatch:' \
+	'scripts/select-latest-jellyfin-release.sh' \
+	'scripts/ghcr-tag-exists.sh' \
+	'repository: jellyfin/jellyfin' \
+	'repository: jellyfin/jellyfin-web' \
+	'git cherry-pick' \
+	'legacy-filter-query-${{ steps.release.outputs.tag }}' \
+	'ghcr.io/felixfoertsch/jellyfin:legacy-filter-query'
+do
+	if ! grep -Fq "${required}" "${workflow}"; then
+		printf 'FAIL: workflow lacks required contract: %s\n' "${required}" >&2
+		exit 1
+	fi
+done
+
+printf 'release automation tests passed\n'

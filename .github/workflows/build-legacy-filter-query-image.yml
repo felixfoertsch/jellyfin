@@ -1,0 +1,170 @@
+name: Build legacy filter fix image
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-legacy-filter-query-image
+  cancel-in-progress: true
+
+env:
+  FIX_SHA: a44a26b287a328927c6d7bffa0a253b0d1a807dd
+  PACKAGING_SHA: 846b546838941cefac00cfe5ac08d9adf6dff26c
+  IMAGE_REPOSITORY: ghcr.io/felixfoertsch/jellyfin
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: automation
+          persist-credentials: false
+
+      - name: Select newest upstream release
+        id: release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag=$(automation/scripts/select-latest-jellyfin-release.sh)
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check for existing release image
+        id: image
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          exists=$(automation/scripts/ghcr-tag-exists.sh \
+            felixfoertsch/jellyfin \
+            "legacy-filter-query-${RELEASE_TAG}")
+          echo "exists=${exists}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout pinned packaging
+        if: steps.image.outputs.exists == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jellyfin/jellyfin-packaging
+          ref: ${{ env.PACKAGING_SHA }}
+          path: packaging
+          persist-credentials: false
+
+      - name: Checkout release server
+        if: steps.image.outputs.exists == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jellyfin/jellyfin
+          ref: ${{ steps.release.outputs.tag }}
+          path: packaging/jellyfin-server
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout matching release web
+        if: steps.image.outputs.exists == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jellyfin/jellyfin-web
+          ref: ${{ steps.release.outputs.tag }}
+          path: packaging/jellyfin-web
+          persist-credentials: false
+
+      - name: Apply legacy filter query fix
+        if: steps.image.outputs.exists == 'false'
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C packaging/jellyfin-server fetch --no-tags \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "${FIX_SHA}"
+          # git cherry-pick applies the exact fetched commit.
+          git -C packaging/jellyfin-server \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            cherry-pick FETCH_HEAD
+          git -C packaging/jellyfin-server show "${FIX_SHA}" --format= --binary \
+            | git -C packaging/jellyfin-server apply --reverse --check
+          echo "sha=$(git -C packaging/jellyfin-server rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        if: steps.image.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        if: steps.image.outputs.exists == 'false'
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.image.outputs.exists == 'false'
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: packaging
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          pull: true
+          no-cache: true
+          provenance: false
+          sbom: false
+          tags: |
+            ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ steps.release.outputs.tag }}
+            ghcr.io/felixfoertsch/jellyfin:legacy-filter-query
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.patch.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}-legacy-filter-query
+            org.opencontainers.image.title=Jellyfin legacy tag-filter fix
+            de.felixfoertsch.jellyfin.upstream-release=${{ steps.release.outputs.tag }}
+            de.felixfoertsch.jellyfin.fix-revision=${{ env.FIX_SHA }}
+          build-args: |
+            PACKAGE_ARCH=amd64
+            DOTNET_ARCH=x64
+            IMAGE_ARCH=amd64
+            TARGET_ARCH=amd64
+            JELLYFIN_VERSION=${{ steps.release.outputs.version }}-legacy-filter-query
+            CONFIG=Release
+            DOTNET_VERSION=10.0
+            NODEJS_VERSION=24
+            OS_VERSION=trixie
+            FFMPEG_PACKAGE=jellyfin-ffmpeg8
+
+      - name: Publish image summary
+        if: always() && steps.release.outcome == 'success' && steps.image.outcome == 'success'
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_EXISTS: ${{ steps.image.outputs.exists }}
+          PATCHED_SHA: ${{ steps.patch.outputs.sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          {
+            echo "## Legacy filter fix image"
+            echo
+            echo "- Upstream release: ${RELEASE_TAG}"
+            echo "- Fix revision: ${FIX_SHA}"
+            if [[ "${IMAGE_EXISTS}" == "true" ]]; then
+              echo "- Result: already published"
+            else
+              echo "- Release tag: \`${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}\`"
+              echo "- Rolling tag: \`${IMAGE_REPOSITORY}:legacy-filter-query\`"
+              echo "- Immutable digest: \`${BUILD_DIGEST}\`"
+              echo "- Patched server revision: \`${PATCHED_SHA}\`"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
