@@ -153,7 +153,7 @@ cat > "${TEMP_DIR}/curl" <<'BASH'
 set -euo pipefail
 
 if [[ "$*" == *'/token?'* ]]; then
-	if [[ -v MOCK_TOKEN_RESPONSE ]]; then
+	if [[ ${MOCK_TOKEN_RESPONSE+x} ]]; then
 		printf '%s\n' "${MOCK_TOKEN_RESPONSE}"
 	else
 		printf '{"token":"fixture-token"}\n'
@@ -204,6 +204,11 @@ if [[ ! -f "${workflow}" ]]; then
 	exit 1
 fi
 
+if grep -Eq '\[\[[[:space:]]+-v[[:space:]]' "${BASH_SOURCE[0]}"; then
+	printf 'FAIL: release automation tests use the Bash 4.2-only -v test\n' >&2
+	exit 1
+fi
+
 for required in \
 	'schedule:' \
 	'workflow_dispatch:' \
@@ -236,6 +241,7 @@ for required in \
 	'name: Promote rolling image tag' \
 	"if: steps.image.outputs.exists == 'true' || steps.build.outcome == 'success'" \
 	'docker buildx imagetools create' \
+	'--prefer-index=false' \
 	'--tag "${IMAGE_REPOSITORY}:legacy-filter-query"' \
 	'"${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}"' \
 	'Existing immutable image: rolling tag promotion succeeded' \

@@ -151,6 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx imagetools create \
+            --prefer-index=false \
             --tag "${IMAGE_REPOSITORY}:legacy-filter-query" \
             "${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}"
 
