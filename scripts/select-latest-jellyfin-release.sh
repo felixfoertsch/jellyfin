@@ -55,7 +55,7 @@ while [[ -n "${api_url}" ]]; do
 	release_file="${temp_dir}/releases-${page}.json"
 	curl --fail --silent --show-error --location --dump-header "${headers_file}" --output "${release_file}" "${headers[@]}" "${api_url}"
 	release_files+=("${release_file}")
-	api_url=$(awk 'BEGIN { IGNORECASE = 1 } /^link:/ { count = split(substr($0, index($0, ":") + 1), links, ","); for (i = 1; i <= count; i++) if (links[i] ~ /rel="next"/) { match(links[i], /<[^>]+>/); print substr(links[i], RSTART + 1, RLENGTH - 2); exit } }' "${headers_file}")
+	api_url=$(awk 'tolower($0) ~ /^link:/ { count = split(substr($0, index($0, ":") + 1), links, ","); for (i = 1; i <= count; i++) if (links[i] ~ /rel="next"/) { match(links[i], /<[^>]+>/); print substr(links[i], RSTART + 1, RLENGTH - 2); exit } }' "${headers_file}")
 done
 
 jq -s 'add' "${release_files[@]}" | select_latest

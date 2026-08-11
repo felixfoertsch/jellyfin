@@ -100,3 +100,50 @@ cat > "${TEMP_DIR}/empty-tag-name.json" <<'JSON'
 ]
 JSON
 assert_failure "${TEMP_DIR}/empty-tag-name.json" "empty tag_name must fail"
+
+mkdir -p "${TEMP_DIR}/bin"
+cat > "${TEMP_DIR}/bin/curl" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+headers_file=
+release_file=
+url=
+while (( $# > 0 )); do
+	case "$1" in
+		--dump-header)
+			headers_file=$2
+			shift 2
+			;;
+		--output)
+			release_file=$2
+			shift 2
+			;;
+		*)
+			url=$1
+			shift
+			;;
+	esac
+done
+
+case "${url}" in
+	https://example.test/releases?page=1)
+		printf 'HTTP/1.1 200 OK\r\nLink: <https://example.test/releases?page=2>; rel="next"\r\n\r\n' > "${headers_file}"
+		printf '[{"tag_name":"v12.0.0","draft":false,"prerelease":false,"published_at":"2026-08-20T12:00:00Z"}]\n' > "${release_file}"
+		;;
+	https://example.test/releases?page=2)
+		printf 'HTTP/1.1 200 OK\r\n\r\n' > "${headers_file}"
+		printf '[{"tag_name":"v12.0.1","draft":false,"prerelease":false,"published_at":"2026-08-21T12:00:00Z"}]\n' > "${release_file}"
+		;;
+	*)
+		printf 'FAIL: unexpected URL: %s\n' "${url}" >&2
+		exit 1
+		;;
+esac
+BASH
+chmod +x "${TEMP_DIR}/bin/curl"
+
+assert_equal \
+	"v12.0.1" \
+	"$(PATH="${TEMP_DIR}/bin:${PATH}" JELLYFIN_RELEASES_API_URL='https://example.test/releases?page=1' "${ROOT_DIR}/scripts/select-latest-jellyfin-release.sh")" \
+	"pagination follows a capitalized Link header"
