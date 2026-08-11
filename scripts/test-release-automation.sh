@@ -215,10 +215,44 @@ for required in \
 	'legacy-filter-query-${{ steps.release.outputs.tag }}' \
 	'ghcr.io/felixfoertsch/jellyfin:legacy-filter-query'
 do
-	if ! grep -Fq "${required}" "${workflow}"; then
+	if ! grep -Fq -- "${required}" "${workflow}"; then
 		printf 'FAIL: workflow lacks required contract: %s\n' "${required}" >&2
 		exit 1
 	fi
 done
+
+build_tags=$(awk '
+	/^      - name: Build and push$/ { in_build = 1 }
+	in_build && /^          tags: \|$/ { in_tags = 1; next }
+	in_tags && /^          labels: \|$/ { exit }
+	in_tags { print }
+' "${workflow}")
+if grep -Eq '^[[:space:]]*ghcr\.io/felixfoertsch/jellyfin:legacy-filter-query[[:space:]]*$' <<< "${build_tags}"; then
+	printf 'FAIL: workflow build tags include the rolling tag\n' >&2
+	exit 1
+fi
+
+for required in \
+	'name: Promote rolling image tag' \
+	"if: steps.image.outputs.exists == 'true' || steps.build.outcome == 'success'" \
+	'docker buildx imagetools create' \
+	'--tag "${IMAGE_REPOSITORY}:legacy-filter-query"' \
+	'"${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}"' \
+	'Existing immutable image: rolling tag promotion succeeded' \
+	'Publication failed or was skipped' \
+	'Rolling promotion failed or was skipped'
+do
+	if ! grep -Fq -- "${required}" "${workflow}"; then
+		printf 'FAIL: workflow lacks promotion contract: %s\n' "${required}" >&2
+		exit 1
+	fi
+done
+
+promotion_line=$(grep -nF 'name: Promote rolling image tag' "${workflow}" | cut -d: -f1)
+build_line=$(grep -nF 'name: Build and push' "${workflow}" | cut -d: -f1)
+if (( promotion_line <= build_line )); then
+	printf 'FAIL: workflow promotes the rolling tag before immutable publication\n' >&2
+	exit 1
+fi
 
 printf 'release automation tests passed\n'

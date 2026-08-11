@@ -99,11 +99,9 @@ jobs:
           echo "sha=$(git -C packaging/jellyfin-server rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
-        if: steps.image.outputs.exists == 'false'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        if: steps.image.outputs.exists == 'false'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
@@ -125,7 +123,6 @@ jobs:
           sbom: false
           tags: |
             ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-${{ steps.release.outputs.tag }}
-            ghcr.io/felixfoertsch/jellyfin:legacy-filter-query
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.patch.outputs.sha }}
@@ -145,26 +142,59 @@ jobs:
             OS_VERSION=trixie
             FFMPEG_PACKAGE=jellyfin-ffmpeg8
 
+      - name: Promote rolling image tag
+        if: steps.image.outputs.exists == 'true' || steps.build.outcome == 'success'
+        id: promote
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE_REPOSITORY}:legacy-filter-query" \
+            "${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}"
+
       - name: Publish image summary
-        if: always() && steps.release.outcome == 'success' && steps.image.outcome == 'success'
+        if: always()
         shell: bash
         env:
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
           IMAGE_EXISTS: ${{ steps.image.outputs.exists }}
+          IMAGE_OUTCOME: ${{ steps.image.outcome }}
           PATCHED_SHA: ${{ steps.patch.outputs.sha }}
+          PROMOTION_OUTCOME: ${{ steps.promote.outcome }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_OUTCOME: ${{ steps.release.outcome }}
         run: |
           {
             echo "## Legacy filter fix image"
             echo
-            echo "- Upstream release: ${RELEASE_TAG}"
-            echo "- Fix revision: ${FIX_SHA}"
-            if [[ "${IMAGE_EXISTS}" == "true" ]]; then
-              echo "- Result: already published"
+            if [[ "${RELEASE_OUTCOME}" != "success" ]]; then
+              echo "- Publication failed or was skipped: release selection ${RELEASE_OUTCOME:-was skipped}"
+            elif [[ "${IMAGE_OUTCOME}" != "success" ]]; then
+              echo "- Publication failed or was skipped: immutable image check ${IMAGE_OUTCOME:-was skipped}"
             else
-              echo "- Release tag: \`${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}\`"
-              echo "- Rolling tag: \`${IMAGE_REPOSITORY}:legacy-filter-query\`"
-              echo "- Immutable digest: \`${BUILD_DIGEST}\`"
-              echo "- Patched server revision: \`${PATCHED_SHA}\`"
+              echo "- Upstream release: ${RELEASE_TAG}"
+              echo "- Fix revision: ${FIX_SHA}"
+              if [[ "${IMAGE_EXISTS}" == "true" ]]; then
+                if [[ "${PROMOTION_OUTCOME}" == "success" ]]; then
+                  echo "- Existing immutable image: rolling tag promotion succeeded"
+                else
+                  echo "- Rolling promotion failed or was skipped: ${PROMOTION_OUTCOME:-was skipped}"
+                fi
+              elif [[ "${BUILD_OUTCOME}" != "success" ]]; then
+                echo "- Publication failed or was skipped: immutable build ${BUILD_OUTCOME:-was skipped}"
+              elif [[ "${PROMOTION_OUTCOME}" != "success" ]]; then
+                echo "- Rolling promotion failed or was skipped: ${PROMOTION_OUTCOME:-was skipped}"
+              elif [[ -z "${BUILD_DIGEST}" || -z "${PATCHED_SHA}" ]]; then
+                echo "- Publication failed or was skipped: build did not report its digest or patched revision"
+              else
+                echo "- Publication succeeded and rolling tag promotion completed"
+                echo "- Release tag: \`${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}\`"
+                echo "- Rolling tag: \`${IMAGE_REPOSITORY}:legacy-filter-query\`"
+                echo "- Immutable digest: \`${BUILD_DIGEST}\`"
+                echo "- Patched server revision: \`${PATCHED_SHA}\`"
+              fi
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
