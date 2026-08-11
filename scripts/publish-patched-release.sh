@@ -53,7 +53,7 @@ if [[ "${prerelease}" == "true" ]]; then
 	args+=(--prerelease)
 fi
 
-gh "${args[@]}" <<NOTES
+gh "${args[@]}" >/dev/null <<NOTES
 This release builds [Jellyfin ${upstream_name}](https://github.com/jellyfin/jellyfin/releases/tag/${upstream_tag}) with the verified [legacy filter query fix](https://github.com/${GITHUB_REPOSITORY}/commit/${FIX_SHA}).
 
 - Immutable image: \`${IMAGE_REPOSITORY}:legacy-filter-query-${upstream_tag}\`

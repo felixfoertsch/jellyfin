@@ -243,6 +243,7 @@ fi
 if [[ "$*" == create\ * ]]; then
 	: "${MOCK_NOTES_FILE:?MOCK_NOTES_FILE is required}"
 	cat > "${MOCK_NOTES_FILE}"
+	printf 'https://github.com/felixfoertsch/jellyfin/releases/tag/%s\n' "$2"
 	exit
 fi
 
