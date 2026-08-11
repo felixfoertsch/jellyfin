@@ -147,3 +147,32 @@ assert_equal \
 	"v12.0.1" \
 	"$(PATH="${TEMP_DIR}/bin:${PATH}" JELLYFIN_RELEASES_API_URL='https://example.test/releases?page=1' "${ROOT_DIR}/scripts/select-latest-jellyfin-release.sh")" \
 	"pagination follows a capitalized Link header"
+
+cat > "${TEMP_DIR}/curl" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$*" == *'/token?'* ]]; then
+	printf '{"token":"fixture-token"}\n'
+	exit
+fi
+
+printf '%s' "${MOCK_REGISTRY_STATUS}"
+BASH
+chmod +x "${TEMP_DIR}/curl"
+
+assert_equal \
+	"true" \
+	"$(CURL_BIN="${TEMP_DIR}/curl" MOCK_REGISTRY_STATUS=200 "${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5)" \
+	"existing GHCR tag returns true"
+
+assert_equal \
+	"false" \
+	"$(CURL_BIN="${TEMP_DIR}/curl" MOCK_REGISTRY_STATUS=404 "${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5)" \
+	"missing GHCR tag returns false"
+
+if CURL_BIN="${TEMP_DIR}/curl" MOCK_REGISTRY_STATUS=500 \
+	"${ROOT_DIR}/scripts/ghcr-tag-exists.sh" felixfoertsch/jellyfin legacy-filter-query-v12.0-rc5 >/dev/null 2>&1; then
+	printf 'FAIL: unexpected registry status must fail\n' >&2
+	exit 1
+fi
