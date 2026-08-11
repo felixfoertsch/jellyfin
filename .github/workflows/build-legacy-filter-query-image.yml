@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -34,11 +34,17 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           tag=$(automation/scripts/select-latest-jellyfin-release.sh)
+          metadata=$(gh api "repos/jellyfin/jellyfin/releases/tags/${tag}")
+          name=$(jq -er '.name | select(type == "string" and length > 0 and (test("[\\r\\n]") | not))' <<< "${metadata}")
+          prerelease=$(jq -er '.prerelease | select(type == "boolean")' <<< "${metadata}")
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
 
       - name: Check for existing release image
         id: image
@@ -154,6 +160,24 @@ jobs:
             --tag "${IMAGE_REPOSITORY}:legacy-filter-query" \
             "${IMAGE_REPOSITORY}:legacy-filter-query-${RELEASE_TAG}"
 
+      - name: Publish GitHub Release
+        if: steps.promote.outcome == 'success'
+        id: github_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_NAME: ${{ steps.release.outputs.name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          result=$(automation/scripts/publish-patched-release.sh \
+            "${RELEASE_TAG}" \
+            "${RELEASE_NAME}" \
+            "${PRERELEASE}" \
+            "${GITHUB_SHA}")
+          echo "result=${result}" >> "${GITHUB_OUTPUT}"
+
       - name: Publish image summary
         if: always()
         shell: bash
@@ -164,6 +188,8 @@ jobs:
           IMAGE_OUTCOME: ${{ steps.image.outcome }}
           PATCHED_SHA: ${{ steps.patch.outputs.sha }}
           PROMOTION_OUTCOME: ${{ steps.promote.outcome }}
+          GITHUB_RELEASE_OUTCOME: ${{ steps.github_release.outcome }}
+          GITHUB_RELEASE_RESULT: ${{ steps.github_release.outputs.result }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_OUTCOME: ${{ steps.release.outcome }}
         run: |
@@ -180,6 +206,15 @@ jobs:
               if [[ "${IMAGE_EXISTS}" == "true" ]]; then
                 if [[ "${PROMOTION_OUTCOME}" == "success" ]]; then
                   echo "- Existing immutable image: rolling tag promotion succeeded"
+                  if [[ "${GITHUB_RELEASE_OUTCOME}" != "success" ]]; then
+                    echo "- GitHub Release publication failed or was skipped: ${GITHUB_RELEASE_OUTCOME:-was skipped}"
+                  elif [[ "${GITHUB_RELEASE_RESULT}" == "created" ]]; then
+                    echo "- GitHub Release publication created the release"
+                  elif [[ "${GITHUB_RELEASE_RESULT}" == "existing" ]]; then
+                    echo "- GitHub Release publication found the existing release"
+                  else
+                    echo "- GitHub Release publication failed or was skipped: no result"
+                  fi
                 else
                   echo "- Rolling promotion failed or was skipped: ${PROMOTION_OUTCOME:-was skipped}"
                 fi
@@ -195,6 +230,15 @@ jobs:
                 echo "- Rolling tag: \`${IMAGE_REPOSITORY}:legacy-filter-query\`"
                 echo "- Immutable digest: \`${BUILD_DIGEST}\`"
                 echo "- Patched server revision: \`${PATCHED_SHA}\`"
+                if [[ "${GITHUB_RELEASE_OUTCOME}" != "success" ]]; then
+                  echo "- GitHub Release publication failed or was skipped: ${GITHUB_RELEASE_OUTCOME:-was skipped}"
+                elif [[ "${GITHUB_RELEASE_RESULT}" == "created" ]]; then
+                  echo "- GitHub Release publication created the release"
+                elif [[ "${GITHUB_RELEASE_RESULT}" == "existing" ]]; then
+                  echo "- GitHub Release publication found the existing release"
+                else
+                  echo "- GitHub Release publication failed or was skipped: no result"
+                fi
               fi
             fi
           } >> "${GITHUB_STEP_SUMMARY}"

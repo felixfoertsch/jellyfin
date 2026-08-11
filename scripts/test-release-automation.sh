@@ -218,6 +218,111 @@ if CURL_BIN="${TEMP_DIR}/curl" MOCK_TOKEN_RESPONSE='{"token":""}' \
 	exit 1
 fi
 
+mkdir -p "${TEMP_DIR}/release-bin"
+cat > "${TEMP_DIR}/release-bin/gh" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${MOCK_GH_LOG:?MOCK_GH_LOG is required}"
+printf '%s' "$1" >> "${MOCK_GH_LOG}"
+shift
+for arg in "$@"; do
+	printf ' %s' "${arg}" >> "${MOCK_GH_LOG}"
+done
+printf '\n' >> "${MOCK_GH_LOG}"
+
+if [[ "$*" == view\ * ]]; then
+	[[ "${MOCK_RELEASE_EXISTS}" == "true" ]]
+	exit
+fi
+if [[ "$*" == create\ * ]]; then
+	: "${MOCK_NOTES_FILE:?MOCK_NOTES_FILE is required}"
+	cat > "${MOCK_NOTES_FILE}"
+	exit
+fi
+
+printf 'unexpected gh command\n' >&2
+exit 1
+BASH
+chmod +x "${TEMP_DIR}/release-bin/gh"
+
+release_log=${TEMP_DIR}/release.log
+release_notes=${TEMP_DIR}/release-notes.md
+result=$(
+	PATH="${TEMP_DIR}/release-bin:${PATH}" \
+	MOCK_GH_LOG="${release_log}" \
+	MOCK_NOTES_FILE="${release_notes}" \
+	MOCK_RELEASE_EXISTS=false \
+	GH_TOKEN=fixture \
+	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
+	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
+	FIX_SHA=a44a26b287a328927c6d7bffa0a253b0d1a807dd \
+	"${ROOT_DIR}/scripts/publish-patched-release.sh" \
+	v12.0-rc5 '12.0 RC5' true fixture-target
+)
+assert_equal "created" "${result}" "missing RC release is created"
+
+for required in \
+	'release create v12.0-rc5-legacy-filter-query' \
+	'--title Jellyfin 12.0 RC5 + legacy filter query fix' \
+	'--target fixture-target' \
+	'--prerelease'
+do
+	if ! grep -Fq -- "${required}" "${release_log}"; then
+		printf 'FAIL: RC release command lacks: %s\n' "${required}" >&2
+		exit 1
+	fi
+done
+
+for required in \
+	'https://github.com/jellyfin/jellyfin/releases/tag/v12.0-rc5' \
+	'ghcr.io/felixfoertsch/jellyfin:legacy-filter-query-v12.0-rc5' \
+	'ghcr.io/felixfoertsch/jellyfin:legacy-filter-query' \
+	'https://github.com/felixfoertsch/jellyfin/commit/a44a26b287a328927c6d7bffa0a253b0d1a807dd' \
+	'linux/amd64' \
+	'Apply the update manually'
+do
+	if ! grep -Fq -- "${required}" "${release_notes}"; then
+		printf 'FAIL: release notes lack: %s\n' "${required}" >&2
+		exit 1
+	fi
+done
+
+: > "${release_log}"
+PATH="${TEMP_DIR}/release-bin:${PATH}" \
+	MOCK_GH_LOG="${release_log}" \
+	MOCK_NOTES_FILE="${release_notes}" \
+	MOCK_RELEASE_EXISTS=false \
+	GH_TOKEN=fixture \
+	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
+	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
+	FIX_SHA=a44a26b287a328927c6d7bffa0a253b0d1a807dd \
+	"${ROOT_DIR}/scripts/publish-patched-release.sh" \
+	v12.0.0 '12.0.0' false fixture-target >/dev/null
+if grep -Fq -- '--prerelease' "${release_log}"; then
+	printf 'FAIL: stable release is marked prerelease\n' >&2
+	exit 1
+fi
+
+: > "${release_log}"
+result=$(
+	PATH="${TEMP_DIR}/release-bin:${PATH}" \
+	MOCK_GH_LOG="${release_log}" \
+	MOCK_NOTES_FILE="${release_notes}" \
+	MOCK_RELEASE_EXISTS=true \
+	GH_TOKEN=fixture \
+	GITHUB_REPOSITORY=felixfoertsch/jellyfin \
+	IMAGE_REPOSITORY=ghcr.io/felixfoertsch/jellyfin \
+	FIX_SHA=a44a26b287a328927c6d7bffa0a253b0d1a807dd \
+	"${ROOT_DIR}/scripts/publish-patched-release.sh" \
+	v12.0-rc5 '12.0 RC5' true fixture-target
+)
+assert_equal "existing" "${result}" "existing release is unchanged"
+if grep -Fq 'release create' "${release_log}"; then
+	printf 'FAIL: existing release is recreated\n' >&2
+	exit 1
+fi
+
 workflow=${ROOT_DIR}/.github/workflows/build-legacy-filter-query-image.yml
 if [[ ! -f "${workflow}" ]]; then
 	printf 'FAIL: release workflow is missing\n' >&2
@@ -283,12 +388,31 @@ do
 		printf 'FAIL: workflow lacks promotion contract: %s\n' "${required}" >&2
 		exit 1
 	fi
+	done
+
+for required in \
+	'contents: write' \
+	'legacy-filter-query' \
+	'name: Publish GitHub Release' \
+	"if: steps.promote.outcome == 'success'" \
+	'scripts/publish-patched-release.sh'
+do
+	if ! grep -Fq -- "${required}" "${workflow}"; then
+		printf 'FAIL: workflow lacks GitHub Release contract: %s\n' "${required}" >&2
+		exit 1
+	fi
 done
 
 promotion_line=$(grep -nF 'name: Promote rolling image tag' "${workflow}" | cut -d: -f1)
 build_line=$(grep -nF 'name: Build and push' "${workflow}" | cut -d: -f1)
 if (( promotion_line <= build_line )); then
 	printf 'FAIL: workflow promotes the rolling tag before immutable publication\n' >&2
+	exit 1
+fi
+
+github_release_line=$(grep -nF 'name: Publish GitHub Release' "${workflow}" | cut -d: -f1)
+if (( github_release_line <= promotion_line )); then
+	printf 'FAIL: workflow publishes the GitHub Release before rolling promotion\n' >&2
 	exit 1
 fi
 
